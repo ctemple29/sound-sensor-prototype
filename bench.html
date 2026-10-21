@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor Layer starter: bench</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0d; overflow: hidden; }
+    #piece { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    #camera { position: fixed; right: 12px; bottom: 12px; width: 200px; transform: scaleX(-1);
+              border-radius: 4px; opacity: 0; pointer-events: none; }
+    #camera.shown { opacity: 1; }
+    #start { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             font: 16px/1.2 system-ui, sans-serif; padding: 12px 20px; border-radius: 6px;
+             border: 1px solid #f2efe9; background: transparent; color: #f2efe9; cursor: pointer; }
+    #start:disabled { opacity: 0.6; cursor: wait; }
+    pre { position: fixed; margin: 0; padding: 10px 12px; font: 12px/1.45 ui-monospace, Menlo, monospace;
+          color: #f2efe9; background: rgba(0, 0, 0, 0.7); border-radius: 4px; white-space: pre; }
+    #readout { left: 12px; top: 12px; }
+    #scores { right: 12px; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+  </style>
+</head>
+<body>
+  <canvas id="piece"></canvas>
+  <video id="camera" playsinline muted></video>
+  <button id="start">Connect the Arduino</button>
+  <pre id="readout" hidden></pre>
+  <pre id="scores" hidden></pre>
+
+  <!-- The bench page: an Arduino over USB instead of the camera. Same order as
+       index.html, with the bench table and the serial sense layer swapped in. -->
+  <script src="bench/table-bench.js"></script>
+  <script src="fake-sense.js"></script>
+  <script src="piece.js"></script>
+  <script type="module" src="bench/sense-serial.js"></script>
+</body>
+</html>
