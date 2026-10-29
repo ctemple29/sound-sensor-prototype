@@ -82,3 +82,6 @@ Mr. Reasy's own bench sensors, lent to pairs whose simple sensor already works i
 
 Same rule as the shelf: the sensor gives a number and your State Table gives it a meaning. A radar `count` of 2 is two bodies in range, not a crowd that wants anything.
 
+
+
+Day 1: Preliminary Wiring
