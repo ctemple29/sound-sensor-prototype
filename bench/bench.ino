@@ -1,4 +1,4 @@
-  // put your setup code here, to run once:
+   // put your setup code here, to run once:
 // bench.ino: the Arduino half of a bench pair's sensor.
 //
 // It reads the sensor and prints one line per reading over USB, as name and
@@ -20,23 +20,34 @@
 // Output: 12-bit PWM on D9 (Timer1), filtered to 0-5 V, then scaled to 0-10 V externally.
 // US-025A (trigger/echo) -> Arduino Nano -> 0.96" SSD1306 OLED (I2C)
 // Serial output keeps the original "cm 42.5" format at 115200 baud.
+// US-025A + SSD1306 OLED + analog microphone + red LED on Arduino Nano
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-const int TRIG = 9;
-const int ECHO = 10;
+// ---------- Pins ----------
+const int TRIG    = 9;
+const int ECHO    = 10;
+const int MIC_PIN = A0;
+const int LED_PIN = 6;                    // red LED via 220 ohm resistor
 
+// ---------- Settings ----------
 const float RANGE_CM = 400.0;
-const float SMOOTHING = 0.5;               // 0..1, higher = faster response
-const unsigned long PING_TIMEOUT_US = 25000UL;  // ~4.3 m max
-const unsigned long PING_PERIOD_MS  = 30;       // ~33 readings/s
-const unsigned long DRAW_PERIOD_MS  = 100;      // ~10 display updates/s
+const float SMOOTHING = 0.5;
+const unsigned long PING_TIMEOUT_US = 25000UL;
+const unsigned long PING_PERIOD_MS  = 30;
+const unsigned long DRAW_PERIOD_MS  = 100;
+
+const int  MIC_THRESHOLD        = 50;    // LED turns on above this (0-1023 scale)
+const unsigned long MIC_WINDOW_MS   = 50;     // sampling window for peak-to-peak
+const unsigned long LED_HOLD_MS     = 200;    // keep LED on briefly so flashes are visible
+const unsigned long MIC_PRINT_MS    = 2000;   // serial report interval
+const bool PRINT_DISTANCE = false;        // true = also print cm at ~33 Hz (floods the monitor)
 
 #define SCREEN_W 128
 #define SCREEN_H 64
-#define OLED_ADDR 0x3C            // try 0x3D if "oled NOT found"
+#define OLED_ADDR 0x3C
 
 Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, -1);
 bool oledOk = false;
@@ -45,13 +56,19 @@ float filtered = RANGE_CM;
 bool haveReading = false;
 uint8_t misses = 0;
 
+// Microphone state
+int micMin = 1023, micMax = 0;
+int micLevel = 0;                 // latest peak-to-peak
+int micPeak2s = 0;                // loudest peak-to-peak since last serial report
+unsigned long micWindowStart = 0, ledOffAt = 0, lastMicPrint = 0;
+
 unsigned long pingUs() {
   digitalWrite(TRIG, LOW);
   delayMicroseconds(4);
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(15);
   digitalWrite(TRIG, LOW);
-  return pulseIn(ECHO, HIGH, PING_TIMEOUT_US);   // 0 = no echo
+  return pulseIn(ECHO, HIGH, PING_TIMEOUT_US);
 }
 
 void drawScreen(bool valid, float cm) {
@@ -79,11 +96,36 @@ void drawScreen(bool valid, float cm) {
   display.display();
 }
 
+void updateMic(unsigned long now) {
+  int s = analogRead(MIC_PIN);
+  if (s < micMin) micMin = s;
+  if (s > micMax) micMax = s;
+
+  if (now - micWindowStart >= MIC_WINDOW_MS) {
+    micLevel = micMax - micMin;
+    if (micLevel > micPeak2s) micPeak2s = micLevel;
+    if (micLevel > MIC_THRESHOLD) ledOffAt = now + LED_HOLD_MS;
+    micMin = 1023; micMax = 0;
+    micWindowStart = now;
+  }
+
+  digitalWrite(LED_PIN, (long)(ledOffAt - now) > 0 ? HIGH : LOW);
+
+  if (now - lastMicPrint >= MIC_PRINT_MS) {
+    lastMicPrint = now;
+    Serial.print(F("mic "));
+    Serial.println(micPeak2s);
+    micPeak2s = 0;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
+  pinMode(LED_PIN, OUTPUT);
   digitalWrite(TRIG, LOW);
+  digitalWrite(LED_PIN, LOW);
   Serial.println(F("boot"));
 
 #if defined(WIRE_HAS_TIMEOUT)
@@ -94,13 +136,16 @@ void setup() {
   oledOk = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   Serial.print(oledOk ? F("oled ok, init ms: ") : F("oled NOT found, ms: "));
   Serial.println(millis() - t0);
+  if (oledOk) Wire.setClock(400000);
 
-  if (oledOk) Wire.setClock(400000);   // remove this line if the display glitches
+  micWindowStart = lastMicPrint = millis();
 }
 
 void loop() {
   static unsigned long lastPing = 0, lastDraw = 0;
   unsigned long now = millis();
+
+  updateMic(now);
 
   if (now - lastPing >= PING_PERIOD_MS) {
     lastPing = now;
@@ -111,21 +156,15 @@ void loop() {
       filtered = haveReading ? filtered + SMOOTHING * (cm - filtered) : cm;
       haveReading = true;
       misses = 0;
-      Serial.print(F("cm "));
-      Serial.println(filtered, 1);
+      if (PRINT_DISTANCE) { Serial.print(F("cm ")); Serial.println(filtered, 1); }
     } else {
       if (misses < 255) misses++;
-      Serial.println(F("cm 400.0   (no echo)"));
+      if (PRINT_DISTANCE) Serial.println(F("cm 400.0   (no echo)"));
     }
   }
 
   if (oledOk && now - lastDraw >= DRAW_PERIOD_MS) {
     lastDraw = now;
-    unsigned long t0 = millis();
-    drawScreen(haveReading && misses < 5, filtered);   // "---" after 5 straight misses
-    unsigned long dt = millis() - t0;
-    if (dt > 100) {                    // only prints when the display is slow
-      Serial.print(F("slow display update ms: "));
-      Serial.println(dt);
-    }
+    drawScreen(haveReading && misses < 5, filtered);
   }
+}
