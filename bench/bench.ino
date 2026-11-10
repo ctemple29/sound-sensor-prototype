@@ -1,4 +1,4 @@
-   // put your setup code here, to run once:
+  // put your setup code here, to run once:
 // bench.ino: the Arduino half of a bench pair's sensor.
 //
 // It reads the sensor and prints one line per reading over USB, as name and
@@ -20,17 +20,20 @@
 // Output: 12-bit PWM on D9 (Timer1), filtered to 0-5 V, then scaled to 0-10 V externally.
 // US-025A (trigger/echo) -> Arduino Nano -> 0.96" SSD1306 OLED (I2C)
 // Serial output keeps the original "cm 42.5" format at 115200 baud.
-// US-025A + SSD1306 OLED + analog microphone + red LED on Arduino Nano
+// US-025A + SSD1306 OLED + analog microphone + touch sensor + red LED
+// Arduino Nano
+// Red LED: lights when the mic is loud, and blinks 5 times when the touch sensor is touched.
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
 // ---------- Pins ----------
-const int TRIG    = 9;
-const int ECHO    = 10;
-const int MIC_PIN = A0;
-const int LED_PIN = 6;                    // red LED via 220 ohm resistor
+const int TRIG      = 9;
+const int ECHO      = 10;
+const int MIC_PIN   = A0;
+const int LED_PIN   = 6;      // red LED via 220 ohm resistor
+const int TOUCH_PIN = 4;      // touch sensor IO
 
 // ---------- Settings ----------
 const float RANGE_CM = 400.0;
@@ -39,11 +42,15 @@ const unsigned long PING_TIMEOUT_US = 25000UL;
 const unsigned long PING_PERIOD_MS  = 30;
 const unsigned long DRAW_PERIOD_MS  = 100;
 
-const int  MIC_THRESHOLD        = 50;    // LED turns on above this (0-1023 scale)
-const unsigned long MIC_WINDOW_MS   = 50;     // sampling window for peak-to-peak
-const unsigned long LED_HOLD_MS     = 200;    // keep LED on briefly so flashes are visible
-const unsigned long MIC_PRINT_MS    = 2000;   // serial report interval
-const bool PRINT_DISTANCE = false;        // true = also print cm at ~33 Hz (floods the monitor)
+const int  MIC_THRESHOLD            = 100;
+const unsigned long MIC_WINDOW_MS   = 50;
+const unsigned long LED_HOLD_MS     = 200;
+const unsigned long MIC_PRINT_MS    = 2000;
+const bool PRINT_DISTANCE           = false;   // true = also print cm at ~33 Hz
+
+const bool TOUCH_ACTIVE_HIGH        = true;    // set false if the sensor reads inverted
+const uint8_t BLINK_COUNT           = 5;       // number of blinks per touch
+const unsigned long BLINK_MS        = 60;      // length of each on and each off phase
 
 #define SCREEN_W 128
 #define SCREEN_H 64
@@ -58,9 +65,15 @@ uint8_t misses = 0;
 
 // Microphone state
 int micMin = 1023, micMax = 0;
-int micLevel = 0;                 // latest peak-to-peak
-int micPeak2s = 0;                // loudest peak-to-peak since last serial report
+int micLevel = 0;
+int micPeak2s = 0;
 unsigned long micWindowStart = 0, ledOffAt = 0, lastMicPrint = 0;
+
+// Touch / blink state
+bool lastTouched = false;
+bool blinking = false;
+uint8_t blinkToggles = 0;
+unsigned long nextBlinkAt = 0;
 
 unsigned long pingUs() {
   digitalWrite(TRIG, LOW);
@@ -109,7 +122,10 @@ void updateMic(unsigned long now) {
     micWindowStart = now;
   }
 
-  digitalWrite(LED_PIN, (long)(ledOffAt - now) > 0 ? HIGH : LOW);
+  // The blink sequence has priority over the mic while it is running
+  if (!blinking) {
+    digitalWrite(LED_PIN, (long)(ledOffAt - now) > 0 ? HIGH : LOW);
+  }
 
   if (now - lastMicPrint >= MIC_PRINT_MS) {
     lastMicPrint = now;
@@ -119,11 +135,36 @@ void updateMic(unsigned long now) {
   }
 }
 
+void updateTouch(unsigned long now) {
+  bool touched = (digitalRead(TOUCH_PIN) == (TOUCH_ACTIVE_HIGH ? HIGH : LOW));
+
+  // Start a blink sequence on a new touch (not while one is already running)
+  if (touched && !lastTouched && !blinking) {
+    blinking = true;
+    blinkToggles = 1;                 // 1 = first "on"
+    digitalWrite(LED_PIN, HIGH);
+    nextBlinkAt = now + BLINK_MS;
+  }
+  lastTouched = touched;
+
+  // Advance the sequence: odd toggles = on, even toggles = off
+  if (blinking && (long)(now - nextBlinkAt) >= 0) {
+    blinkToggles++;
+    digitalWrite(LED_PIN, (blinkToggles % 2 == 1) ? HIGH : LOW);
+    nextBlinkAt += BLINK_MS;
+    if (blinkToggles >= BLINK_COUNT * 2) {   // finished the last "off"
+      blinking = false;
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   pinMode(LED_PIN, OUTPUT);
+  pinMode(TOUCH_PIN, INPUT);
   digitalWrite(TRIG, LOW);
   digitalWrite(LED_PIN, LOW);
   Serial.println(F("boot"));
@@ -146,6 +187,7 @@ void loop() {
   unsigned long now = millis();
 
   updateMic(now);
+  updateTouch(now);
 
   if (now - lastPing >= PING_PERIOD_MS) {
     lastPing = now;
