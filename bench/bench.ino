@@ -45,8 +45,7 @@ const unsigned long DRAW_PERIOD_MS  = 100;
 const int  MIC_THRESHOLD            = 100;
 const unsigned long MIC_WINDOW_MS   = 50;
 const unsigned long LED_HOLD_MS     = 200;
-const unsigned long MIC_PRINT_MS    = 2000;
-const bool PRINT_DISTANCE           = false;   // true = also print cm at ~33 Hz
+const bool PRINT_DISTANCE           = true;    // print cm at ~33 Hz
 
 const bool TOUCH_ACTIVE_HIGH        = true;    // set false if the sensor reads inverted
 const uint8_t BLINK_COUNT           = 5;       // number of blinks per touch
@@ -66,8 +65,7 @@ uint8_t misses = 0;
 // Microphone state
 int micMin = 1023, micMax = 0;
 int micLevel = 0;
-int micPeak2s = 0;
-unsigned long micWindowStart = 0, ledOffAt = 0, lastMicPrint = 0;
+unsigned long micWindowStart = 0, ledOffAt = 0;
 
 // Touch / blink state
 bool lastTouched = false;
@@ -116,8 +114,9 @@ void updateMic(unsigned long now) {
 
   if (now - micWindowStart >= MIC_WINDOW_MS) {
     micLevel = micMax - micMin;
-    if (micLevel > micPeak2s) micPeak2s = micLevel;
     if (micLevel > MIC_THRESHOLD) ledOffAt = now + LED_HOLD_MS;
+    Serial.print(F("mic "));
+    Serial.println(micLevel);
     micMin = 1023; micMax = 0;
     micWindowStart = now;
   }
@@ -126,17 +125,15 @@ void updateMic(unsigned long now) {
   if (!blinking) {
     digitalWrite(LED_PIN, (long)(ledOffAt - now) > 0 ? HIGH : LOW);
   }
-
-  if (now - lastMicPrint >= MIC_PRINT_MS) {
-    lastMicPrint = now;
-    Serial.print(F("mic "));
-    Serial.println(micPeak2s);
-    micPeak2s = 0;
-  }
 }
 
 void updateTouch(unsigned long now) {
   bool touched = (digitalRead(TOUCH_PIN) == (TOUCH_ACTIVE_HIGH ? HIGH : LOW));
+
+  if (touched != lastTouched) {
+    Serial.print(F("touch "));
+    Serial.println(touched ? 1 : 0);
+  }
 
   // Start a blink sequence on a new touch (not while one is already running)
   if (touched && !lastTouched && !blinking) {
@@ -179,7 +176,7 @@ void setup() {
   Serial.println(millis() - t0);
   if (oledOk) Wire.setClock(400000);
 
-  micWindowStart = lastMicPrint = millis();
+  micWindowStart = millis();
 }
 
 void loop() {
