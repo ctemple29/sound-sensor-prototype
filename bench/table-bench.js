@@ -18,7 +18,8 @@ window.TABLE = {
   states: [
     { name: 'interested',   when: s => s.touch > 0.5,   hold: 0 },
     { name: 'disturbance', when: s => s.loud > 0.5,    hold: 0 },
-    { name: 'passerby',    when: s => s.present > 0.5, hold: 0.5 },
+    { name: 'insignificant',    when: s => s.present > 0.5, hold: 0.5 },
     { name: 'gone',        when: s => s.present < 0.5, hold: 0.1 },
+    { name: 'near',    when: s => s.present > 0.7, hold: 0.5 },
   ],
 };

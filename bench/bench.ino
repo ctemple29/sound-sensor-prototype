@@ -1,4 +1,4 @@
- // put your setup code here, to run once:
+  // put your setup code here, to run once:
 // bench.ino: the Arduino half of a bench pair's sensor.
 //
 // It reads the sensor and prints one line per reading over USB, as name and
@@ -16,20 +16,16 @@
 // before the println, e.g. a photoresistor divider on A0:
 //   Serial.print(" light "); Serial.print(analogRead(A0));
 
-// US-025A (trigger/echo mode) -> Arduino Nano -> JUMO analog input
-// Output: 12-bit PWM on D9 (Timer1), filtered to 0-5 V, then scaled to 0-10 V externally.
-// US-025A (trigger/echo) -> Arduino Nano -> 0.96" SSD1306 OLED (I2C)
-// Serial output keeps the original "cm 42.5" format at 115200 baud.
 // US-025A + SSD1306 OLED + analog microphone + touch sensor + red LED
 // Arduino Nano
 //
 // OLED states (each stays on screen STATE_HOLD_MS after it was last triggered):
-//   Gone         no echo or object beyond 200 cm (distance reading hidden)
-//   Passerby     object within 200 cm (distance shown)
-//   Near         object closer than 15 cm (distance shown)
-//   Interested   touch sensor touched (shown once for TOUCH_HOLD_MS, then locked out briefly)
-//   Disturbance  mic level above MIC_THRESHOLD (distance shown)
-// Priority: Interested > Disturbance > Near > Passerby > Gone
+//   Gone          no echo or object beyond 200 cm (distance reading hidden)
+//   Distant       object within 200 cm (distance shown)
+//   Near          object closer than 15 cm (distance shown)
+//   Interested    touch sensor touched (shown once for TOUCH_HOLD_MS, then locked out briefly)
+//   Clamouring    mic level above MIC_THRESHOLD (distance shown)
+// Priority: Interested > Clamouring > Near > Distant > Gone
 // Displayed distance = average of the last 2 seconds of readings.
 // Readings taken during a loud mic window are discarded, so sound does not affect distance.
 // Red LED: lights when the mic is loud, and blinks 5 times on a new touch.
@@ -55,12 +51,13 @@ const float SMOOTHING = 0.5;       // live filter, used for the state decisions
 const unsigned long PING_TIMEOUT_US = 25000UL;
 const unsigned long PING_PERIOD_MS  = 30;
 
-const unsigned long DRAW_PERIOD_MS  = 250;     // OLED refresh while not "Gone" (also redraws on state change)
-const unsigned long REINIT_MS       = 10000;   // re-initialize the OLED this often to clear glitches (0 = off)
+const unsigned long DRAW_PERIOD_MS  = 250;     // OLED refresh while showing a distance state
+const unsigned long GONE_REDRAW_MS  = 1000;    // OLED refresh while on "Gone" (clears any glitch)
+const unsigned long REINIT_MS       = 0;       // re-initialize the OLED this often (0 = off, recommended)
 #define I2C_CLOCK 400000UL                     // try 100000UL if the display still glitches
 
 const unsigned long AVG_WINDOW_MS   = 2000;    // distance shown is the average over this time
-const unsigned long STATE_HOLD_MS   = 3000;    // Passerby / Near / Disturbance persist this long after triggering
+const unsigned long STATE_HOLD_MS   = 3000;    // Distant / Near / Clamouring persist this long after triggering
 
 const unsigned long TOUCH_HOLD_MS    = 2000;   // "Interested" lasts exactly this long, no extension
 const unsigned long TOUCH_LOCKOUT_MS = 1000;   // after it ends, touches are ignored for this long
@@ -82,7 +79,7 @@ const unsigned long BLINK_MS        = 60;
 Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, -1, I2C_CLOCK, I2C_CLOCK);
 bool oledOk = false;
 
-enum State { GONE, PASSERBY, NEAR, INTERESTED, DISTURBANCE };
+enum State { GONE, DISTANT, NEAR, INTERESTED, CLAMOURING };
 State lastState = GONE;
 bool forceDraw = true;
 
@@ -106,7 +103,7 @@ uint8_t bCnt[NUM_BUCKETS];
 unsigned long bId[NUM_BUCKETS];
 
 // State hold timers
-unsigned long touchUntil = 0, touchReadyAt = 0, micShowUntil = 0, passUntil = 0, nearUntil = 0;
+unsigned long touchUntil = 0, touchReadyAt = 0, micShowUntil = 0, distantUntil = 0, nearUntil = 0;
 
 // Microphone state
 int micMin = 1023, micMax = 0;
@@ -178,7 +175,7 @@ void drawScreen(State state, bool valid, float cm) {
   display.setTextColor(SSD1306_WHITE);
 
   if (state == GONE) {
-    // Distance reading is off: just the word, centered
+    // Distance reading is off: just the word, centered (4 chars x 18 px at size 3)
     display.setTextSize(3);
     display.setCursor((SCREEN_W - 4 * 18) / 2, 20);
     display.print(F("Gone"));
@@ -186,32 +183,32 @@ void drawScreen(State state, bool valid, float cm) {
     return;
   }
 
-  // Label across the top (drops to size 1 if it would not fit at size 2)
-  const char* label = (state == PASSERBY)   ? "Passerby"
+  // State label across the top, size 2 (the longest label is 120 px wide, so it fits)
+  const char* label = (state == DISTANT)    ? "Distant"
                     : (state == NEAR)       ? "Near"
                     : (state == INTERESTED) ? "Interested"
-                                            : "Disturbance";
-  display.setTextSize((strlen(label) * 12 <= SCREEN_W) ? 2 : 1);
+                                            : "Clamouring";
+  display.setTextSize(2);
   display.setCursor(0, 0);
   display.print(label);
 
-  // Distance reading (2-second average)
+  // Distance reading (2-second average), size 3
   display.setTextSize(3);
-  display.setCursor(0, 24);
+  display.setCursor(0, 22);
   if (valid) display.print(cm, 1);
   else       display.print(F("---"));
 
-  // Small "cm" label, placed right after the number, on the number's baseline
+  // Small "cm" label, right after the number, aligned with its bottom edge
   int x = display.getCursorX() + 4;
   display.setTextSize(1);
-  display.setCursor(x, 40);
+  display.setCursor(x, 38);
   display.print(F("cm"));
 
-  // Bar graph
-  display.drawRect(0, 52, SCREEN_W, 12, SSD1306_WHITE);
+  // Bar graph, kept a few pixels clear of the bottom edge
+  display.drawRect(0, 50, SCREEN_W, 10, SSD1306_WHITE);
   if (valid) {
     int barW = (int)((cm / RANGE_CM) * (SCREEN_W - 4));
-    display.fillRect(2, 54, constrain(barW, 0, SCREEN_W - 4), 8, SSD1306_WHITE);
+    display.fillRect(2, 52, constrain(barW, 0, SCREEN_W - 4), 6, SSD1306_WHITE);
   }
   display.display();
 }
@@ -343,7 +340,7 @@ void loop() {
 
   if (!valid || filtered > NEAR_CM)              farAway = true;
   else if (filtered < NEAR_CM - NEAR_HYST_CM)    farAway = false;
-  if (!farAway) passUntil = now + STATE_HOLD_MS;
+  if (!farAway) distantUntil = now + STATE_HOLD_MS;
 
   if (!valid || filtered > CLOSE_CM + CLOSE_HYST_CM)   isClose = false;
   else if (filtered < CLOSE_CM)                        isClose = true;
@@ -351,21 +348,22 @@ void loop() {
 
   State state;
   if ((long)(touchUntil - now) > 0)          state = INTERESTED;
-  else if ((long)(micShowUntil - now) > 0)   state = DISTURBANCE;
+  else if ((long)(micShowUntil - now) > 0)   state = CLAMOURING;
   else if ((long)(nearUntil - now) > 0)      state = NEAR;
-  else if ((long)(passUntil - now) > 0)      state = PASSERBY;
+  else if ((long)(distantUntil - now) > 0)   state = DISTANT;
   else                                       state = GONE;
 
   // ---- Draw only when something changed, or periodically ----
   if (oledOk) {
     if (REINIT_MS && now - lastInit >= REINIT_MS) {
       lastInit = now;
-      display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);   // clears any glitched controller state
+      display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
       forceDraw = true;
     }
 
+    unsigned long period = (state == GONE) ? GONE_REDRAW_MS : DRAW_PERIOD_MS;
     bool changed = (state != lastState) || forceDraw;
-    bool due = (state != GONE) && (now - lastDraw >= DRAW_PERIOD_MS);
+    bool due = (now - lastDraw >= period);
 
     if (changed || due) {
       lastDraw = now;
