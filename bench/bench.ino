@@ -282,7 +282,7 @@ void updateTouch(unsigned long now) {
     }
   }
 }
-
+// Serial Monitor boot status
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG, OUTPUT);
@@ -345,7 +345,7 @@ void loop() {
   if (!valid || filtered > CLOSE_CM + CLOSE_HYST_CM)   isClose = false;
   else if (filtered < CLOSE_CM)                        isClose = true;
   if (isClose) nearUntil = now + STATE_HOLD_MS;
-
+// States and their triggers/results on priority listing
   State state;
   if ((long)(touchUntil - now) > 0)          state = INTERESTED;
   else if ((long)(micShowUntil - now) > 0)   state = CLAMOURING;
