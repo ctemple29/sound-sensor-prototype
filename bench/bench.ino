@@ -16,7 +16,7 @@
 // before the println, e.g. a photoresistor divider on A0:
 //   Serial.print(" light "); Serial.print(analogRead(A0));
 
-// US-025A + SSD1306 OLED + analog microphone + touch sensor + red LED
+ // US-025A + SSD1306 OLED + analog microphone + touch sensor + red LED
 // Arduino Nano
 //
 // OLED states (each stays on screen STATE_HOLD_MS after it was last triggered):
@@ -28,7 +28,8 @@
 // Priority: Interested > Clamouring > Near > Distant > Gone
 // Displayed distance = average of the last 2 seconds of readings.
 // Readings taken during a loud mic window are discarded, so sound does not affect distance.
-// Red LED: lights when the mic is loud, and blinks 5 times on a new touch.
+// Red LED: lights when the mic is loud, blinks 5 times on a new touch,
+//          and blinks 3 times when an object comes within the Near range.
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -62,15 +63,16 @@ const unsigned long STATE_HOLD_MS   = 3000;    // Distant / Near / Clamouring pe
 const unsigned long TOUCH_HOLD_MS    = 2000;   // "Interested" lasts exactly this long, no extension
 const unsigned long TOUCH_LOCKOUT_MS = 1000;   // after it ends, touches are ignored for this long
 
-const int  MIC_THRESHOLD            = 45;      // sensitivity (lower = more sensitive)
+const int  MIC_THRESHOLD            = 50;      // sensitivity (lower = more sensitive)
 const unsigned long MIC_WINDOW_MS   = 50;
 const unsigned long LED_HOLD_MS     = 200;     // red LED stays on this long after a loud sound
 const unsigned long MIC_PRINT_MS    = 250;     // serial mic report interval (loudest level in that time)
 const bool PRINT_DISTANCE           = true;    // print cm (about 20 lines/s)
 
 const bool TOUCH_ACTIVE_HIGH        = true;    // set false if the sensor reads inverted
-const uint8_t BLINK_COUNT           = 5;
-const unsigned long BLINK_MS        = 60;
+const uint8_t TOUCH_BLINK_COUNT     = 5;       // blinks when touched
+const uint8_t NEAR_BLINK_COUNT      = 3;       // blinks when an object comes within CLOSE_CM
+const unsigned long BLINK_MS        = 60;      // length of each on and each off phase
 
 #define SCREEN_W 128
 #define SCREEN_H 64
@@ -114,6 +116,7 @@ unsigned long micWindowStart = 0, ledOffAt = 0, lastMicPrint = 0;
 bool lastTouched = false;
 bool blinking = false;
 uint8_t blinkToggles = 0;
+uint8_t blinkTarget = 0;           // total on/off toggles in the current sequence
 unsigned long nextBlinkAt = 0;
 
 unsigned long pingUs() {
@@ -173,6 +176,7 @@ void commitPending(unsigned long now) {
 void drawScreen(State state, bool valid, float cm) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);      // a long label can never wrap onto the number
 
   if (state == GONE) {
     // Distance reading is off: just the word, centered (4 chars x 18 px at size 3)
@@ -183,12 +187,13 @@ void drawScreen(State state, bool valid, float cm) {
     return;
   }
 
-  // State label across the top, size 2 (the longest label is 120 px wide, so it fits)
-  const char* label = (state == DISTANT)    ? "Distant"
-                    : (state == NEAR)       ? "Near"
-                    : (state == INTERESTED) ? "Interested"
-                                            : "Clamouring";
-  display.setTextSize(2);
+  // State label across the top. All labels fit at size 2 (12 px per character):
+  // the longest, "Interested" and "Clamouring", are 10 characters = 120 px.
+  const char* label = (state == DISTANT)     ? "Distant"
+                    : (state == NEAR)        ? "Near"
+                    : (state == INTERESTED)  ? "Interested"
+                                             : "Clamouring";
+  display.setTextSize((strlen(label) * 12 <= SCREEN_W) ? 2 : 1);
   display.setCursor(0, 0);
   display.print(label);
 
@@ -211,6 +216,29 @@ void drawScreen(State state, bool valid, float cm) {
     display.fillRect(2, 52, constrain(barW, 0, SCREEN_W - 4), 6, SSD1306_WHITE);
   }
   display.display();
+}
+
+// Start a non-blocking blink sequence on the red LED (ignored if one is already running)
+void startBlink(uint8_t count, unsigned long now) {
+  if (blinking) return;
+  blinking = true;
+  blinkToggles = 1;                // 1 = first "on"
+  blinkTarget = count * 2;
+  digitalWrite(LED_PIN, HIGH);
+  nextBlinkAt = now + BLINK_MS;
+}
+
+// Advance the running blink sequence: odd toggles = on, even toggles = off
+void updateBlink(unsigned long now) {
+  if (blinking && (long)(now - nextBlinkAt) >= 0) {
+    blinkToggles++;
+    digitalWrite(LED_PIN, (blinkToggles % 2 == 1) ? HIGH : LOW);
+    nextBlinkAt += BLINK_MS;
+    if (blinkToggles >= blinkTarget) {
+      blinking = false;
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
 }
 
 void updateMic(unsigned long now) {
@@ -261,26 +289,9 @@ void updateTouch(unsigned long now) {
   if (touched && !lastTouched && (long)(now - touchReadyAt) >= 0) {
     touchUntil   = now + TOUCH_HOLD_MS;
     touchReadyAt = touchUntil + TOUCH_LOCKOUT_MS;
-
-    if (!blinking) {
-      blinking = true;
-      blinkToggles = 1;
-      digitalWrite(LED_PIN, HIGH);
-      nextBlinkAt = now + BLINK_MS;
-    }
+    startBlink(TOUCH_BLINK_COUNT, now);
   }
   lastTouched = touched;
-
-  // Advance the sequence: odd toggles = on, even toggles = off
-  if (blinking && (long)(now - nextBlinkAt) >= 0) {
-    blinkToggles++;
-    digitalWrite(LED_PIN, (blinkToggles % 2 == 1) ? HIGH : LOW);
-    nextBlinkAt += BLINK_MS;
-    if (blinkToggles >= BLINK_COUNT * 2) {
-      blinking = false;
-      digitalWrite(LED_PIN, LOW);
-    }
-  }
 }
 
 void setup() {
@@ -313,6 +324,7 @@ void loop() {
 
   updateMic(now);
   updateTouch(now);
+  updateBlink(now);
 
   if (now - lastPing >= PING_PERIOD_MS) {
     lastPing = now;
@@ -342,9 +354,13 @@ void loop() {
   else if (filtered < NEAR_CM - NEAR_HYST_CM)    farAway = false;
   if (!farAway) distantUntil = now + STATE_HOLD_MS;
 
+  bool wasClose = isClose;
   if (!valid || filtered > CLOSE_CM + CLOSE_HYST_CM)   isClose = false;
   else if (filtered < CLOSE_CM)                        isClose = true;
   if (isClose) nearUntil = now + STATE_HOLD_MS;
+
+  // Something just came within the Near range: flash the red LED 3 times
+  if (isClose && !wasClose) startBlink(NEAR_BLINK_COUNT, now);
 
   State state;
   if ((long)(touchUntil - now) > 0)          state = INTERESTED;
