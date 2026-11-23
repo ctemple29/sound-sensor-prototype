@@ -1,4 +1,4 @@
-  // put your setup code here, to run once:
+// put your setup code here, to run once:
 // bench.ino: the Arduino half of a bench pair's sensor.
 //
 // It reads the sensor and prints one line per reading over USB, as name and
@@ -62,7 +62,7 @@ const unsigned long STATE_HOLD_MS   = 3000;    // Distant / Near / Clamouring pe
 const unsigned long TOUCH_HOLD_MS    = 2000;   // "Interested" lasts exactly this long, no extension
 const unsigned long TOUCH_LOCKOUT_MS = 1000;   // after it ends, touches are ignored for this long
 
-const int  MIC_THRESHOLD            = 50;      // sensitivity (lower = more sensitive)
+const int  MIC_THRESHOLD            = 45;      // sensitivity (lower = more sensitive)
 const unsigned long MIC_WINDOW_MS   = 50;
 const unsigned long LED_HOLD_MS     = 200;     // red LED stays on this long after a loud sound
 const unsigned long MIC_PRINT_MS    = 250;     // serial mic report interval (loudest level in that time)
@@ -282,7 +282,7 @@ void updateTouch(unsigned long now) {
     }
   }
 }
-// Serial Monitor boot status
+
 void setup() {
   Serial.begin(115200);
   pinMode(TRIG, OUTPUT);
@@ -345,7 +345,7 @@ void loop() {
   if (!valid || filtered > CLOSE_CM + CLOSE_HYST_CM)   isClose = false;
   else if (filtered < CLOSE_CM)                        isClose = true;
   if (isClose) nearUntil = now + STATE_HOLD_MS;
-// States and their triggers/results on priority listing
+
   State state;
   if ((long)(touchUntil - now) > 0)          state = INTERESTED;
   else if ((long)(micShowUntil - now) > 0)   state = CLAMOURING;
